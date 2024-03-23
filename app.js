@@ -11,21 +11,25 @@ const { TextToSpeechService } = require('./services/tts-service');
 const app = express();
 ExpressWs(app);
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8089;
 
-app.post('/incoming', (req, res) => {
+app.post('/', (req, res) => {
+  console.log('Получен входящий запрос на /'); // Логирование входящего запроса
+
   res.status(200);
   res.type('text/xml');
   res.end(`
   <Response>
     <Connect>
-      <Stream url="wss://${process.env.SERVER}/connection" />
+      <Stream url="wss://${process.env.SERVER}/ws" />
     </Connect>
   </Response>
   `);
 });
 
-app.ws('/connection', (ws) => {
+app.ws('/ws', (ws) => {
+  console.log('Установлено WebSocket соединение'); // Логирование установки соединения
+
   ws.on('error', console.error);
   // Filled in from start message
   let streamSid;
@@ -42,13 +46,20 @@ app.ws('/connection', (ws) => {
   // Incoming from MediaStream
   ws.on('message', function message(data) {
     const msg = JSON.parse(data);
+      
+    ws.on('error', (error) => {
+      console.error(`Ошибка WebSocket: ${error}`); // Логирование ошибок соединения
+    });
+
     if (msg.event === 'start') {
       streamSid = msg.start.streamSid;
       callSid = msg.start.callSid;
       streamService.setStreamSid(streamSid);
       gptService.setCallSid(callSid);
-      console.log(`Twilio -> Starting Media Stream for ${streamSid}`.underline.red);
-      ttsService.generate({partialResponseIndex: null, partialResponse: 'Hello! I understand you\'re looking for a pair of AirPods, is that correct?'}, 1);
+
+      console.log(`Twilio -> Начало потока медиа для ${streamSid}`.underline.red);
+
+      ttsService.generate({partialResponseIndex: null, partialResponse:  'Здравствуйте меня зовут Анна! Вы хотите работать курьером в Яндекс ЕДА?' }, 1);
     } else if (msg.event === 'media') {
       transcriptionService.send(msg.media.payload);
     } else if (msg.event === 'mark') {

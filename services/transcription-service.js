@@ -11,6 +11,7 @@ class TranscriptionService extends EventEmitter {
     this.deepgramLive = deepgram.transcription.live({
       encoding: 'mulaw',
       sample_rate: '8000',
+      language: 'ru-RU',
       model: 'nova-2',
       punctuate: true,
       interim_results: true,
