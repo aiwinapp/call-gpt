@@ -22,6 +22,7 @@ class StreamService extends EventEmitter {
     });
   }
 
+
   async buffer(index, audioStream) {
     const markLabel = uuid.v4();
   
@@ -56,6 +57,7 @@ class StreamService extends EventEmitter {
       this.emit('audiosent', markLabel);
     });
   }
+
 }
 
 module.exports = { StreamService };
