@@ -6,6 +6,9 @@ const Redis = require('ioredis');
 const { Readable } = require('stream');
 const { CallbackHandler } = require('langfuse-langchain'); // Добавьте эту строку
 
+const { spawn } = require('child_process');
+const ffmpeg = require('ffmpeg-static');
+
 const langfuseLangchainHandler = new CallbackHandler({ // Добавьте этот блок
   publicKey: process.env.LANGFUSE_PUBLIC_KEY,
   secretKey: process.env.LANGFUSE_SECRET_KEY,
@@ -33,62 +36,19 @@ class TextToSpeechService extends EventEmitter {
     this.streamSid = '';
   }
   async getAudioData(sentence, ttsService = 'openai', optimizeStreamingLatency = 0) {
+    ttsService = 'elevenlabs'
+
     switch (ttsService) {
       case 'openai':
         return await this.getAudioDataOpenAI(sentence);
+
       case 'elevenlabs':
+        return await this.getAudioDataElevenLabs(sentence, optimizeStreamingLatency)
+        
       default:
         return await this.getAudioDataOpenAI(sentence);
     }
   }
-  // async getAudioData(sentence, optimizeStreamingLatency = 0) {
-  //   const cacheKey = this.getCacheKey(sentence);
-  //   const cachedAudio = await this.cache.getBuffer(cacheKey);
-  
-  //   if (cachedAudio) {
-  //     console.log(`Использование кешированного аудио для фразы: ${sentence}`);
-  //     return cachedAudio;
-  //   } else {
-  //     try {
-  //       const outputFormat = 'ulaw_8000';
-  //       const response = await fetch(
-  //         `https://api.elevenlabs.io/v1/text-to-speech/${this.config.voiceId}/stream?output_format=${outputFormat}&optimize_streaming_latency=${optimizeStreamingLatency}`,
-  //         {
-  //           method: 'POST',
-  //           headers: {
-  //             'xi-api-key': process.env.XI_API_KEY,
-  //             'Content-Type': 'application/json',
-  //             accept: 'audio/wav',
-  //           },
-  //           body: JSON.stringify({
-  //             model_id: process.env.XI_MODEL_ID,
-  //             text: sentence,
-  //             "voice_settings": {
-  //               "similarity_boost": 0,
-  //               "stability": 1,
-  //               "style": 0,
-  //               "use_speaker_boost": true
-  //             }
-  //           }),
-  //         }
-  //       );
-  
-  //       if (!response.ok) {
-  //         throw new Error(`Error generating speech: ${response.statusText}`);
-  //       }
-  
-  //       const audioBuffer = await response.buffer();
-  //       await this.cache.set(cacheKey, audioBuffer);
-  
-  //       console.log(`Сгенерировано новое аудио для фразы: ${sentence}`);
-  //       return audioBuffer;
-  //     } catch (err) {
-  //       console.error('Error occurred in TextToSpeech service');
-  //       console.error(err);
-  //       this.emit('error', err);
-  //     }
-  //   }
-  // }
   
   async getAudioStream(sentence) {
     const audioData = await this.getAudioData(sentence, 0);
@@ -105,11 +65,40 @@ class TextToSpeechService extends EventEmitter {
     const hash = crypto.createHash('sha256').update(normalizedSentence).digest('hex');
     return `audio:${hash}`;
   }
-
+  
+  async convertToUlaw(wavBuffer) {
+    return new Promise((resolve, reject) => {
+      const ffmpegProcess = spawn(ffmpeg, [
+        '-i', '-',
+        '-ar', '8000',
+        '-ac', '1',
+        '-acodec', 'pcm_mulaw',
+        '-f', 'mulaw',
+        '-'
+      ]);
+  
+      ffmpegProcess.stdin.write(wavBuffer);
+      ffmpegProcess.stdin.end();
+  
+      const chunks = [];
+      ffmpegProcess.stdout.on('data', chunk => {
+        chunks.push(chunk);
+      });
+  
+      ffmpegProcess.on('close', code => {
+        if (code === 0) {
+          resolve(Buffer.concat(chunks));
+        } else {
+          reject(`ffmpeg exited with code ${code}`);
+        }
+      });
+    });
+  }
+  
   async getAudioDataOpenAI(sentence) {
     const cacheKey = `openai:${this.getCacheKey(sentence)}`;
     const cachedAudio = await this.cache.getBuffer(cacheKey);
-
+  
     if (cachedAudio) {
       console.log(`Using cached audio for sentence: ${sentence} [OpenAI]`);
       return cachedAudio;
@@ -128,16 +117,21 @@ class TextToSpeechService extends EventEmitter {
             response_format: "wav"
           }),
         });
-
+  
         if (!response.ok) {
           throw new Error(`Error generating speech [OpenAI]: ${response.statusText}`);
         }
-
-        const audioBuffer = await response.buffer();
-        await this.cache.set(cacheKey, audioBuffer);
-
+  
+        const audioBuffer = await response.arrayBuffer();
+  
+        // Перекодирование аудио в формат ulaw_8000
+        const wavBuffer = Buffer.from(audioBuffer);
+        const ulawBuffer = await this.convertToUlaw(wavBuffer);
+  
+        await this.cache.set(cacheKey, ulawBuffer);
+  
         console.log(`Generated new audio for sentence: ${sentence} [OpenAI]`);
-        return audioBuffer;
+        return ulawBuffer;
       } catch (err) {
         console.error('Error occurred in TextToSpeech service [OpenAI]');
         console.error(err);
@@ -145,6 +139,7 @@ class TextToSpeechService extends EventEmitter {
       }
     }
   }
+
   async getAudioDataElevenLabs(sentence, optimizeStreamingLatency) {
     const cacheKey = this.getCacheKey(sentence);
     const cachedAudio = await this.cache.getBuffer(cacheKey);

@@ -23,7 +23,6 @@ const langfuseLangchainHandler = new CallbackHandler({
   baseUrl: process.env.LANGFUSE_HOST,
 });
 
-
 app.post('/', (req, res) => {
   console.log('Получен входящий запрос на /');
 
@@ -40,6 +39,7 @@ app.post('/', (req, res) => {
 
 app.ws('/ws', (ws) => {
   console.log('Установлено WebSocket соединение');
+  ws.setMaxListeners(30); // Увеличьте лимит до 30 (или другого подходящего значения)
 
   ws.on('error', console.error);
   let streamSid;
@@ -47,6 +47,7 @@ app.ws('/ws', (ws) => {
   let from;
 
   const gptService = new GptService();
+
   const streamService = new StreamService(ws);
   const transcriptionService = new TranscriptionService();
   const ttsService = new TextToSpeechService({});
@@ -54,7 +55,7 @@ app.ws('/ws', (ws) => {
   let marks = [];
   let interactionCount = 0;
 
-  ws.on('message', function message(data) {
+  ws.on('message', async function message(data) {
     const msg = JSON.parse(data);
       
     ws.on('error', (error) => {
@@ -75,7 +76,8 @@ app.ws('/ws', (ws) => {
 
       console.log(`Twilio -> Начало потока медиа для ${streamSid}`.underline.red);
 
-      ttsService.generate({partialResponseIndex: null, partialResponse:  'Алло? Здравствуйте, это Константин?' }, 1);
+      await gptService.loadPrompt('Яндекс Еда');
+      ttsService.generate({partialResponseIndex: null, partialResponse:  'Алло! Здравствуйте, это Константин?' }, 1);
 
       langfuseLangchainHandler.handleChainStart(
         { id: ['call'] },

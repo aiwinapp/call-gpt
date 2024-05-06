@@ -2,7 +2,8 @@ require('colors');
 const EventEmitter = require('events');
 const OpenAI = require('openai');
 const tools = require('../functions/function-manifest');
-const { CallbackHandler } = require('langfuse-langchain');
+const { CallbackHandler, Langfuse } = require('langfuse-langchain');
+
 
 const langfuseLangchainHandler = new CallbackHandler({
   publicKey: process.env.LANGFUSE_PUBLIC_KEY,
@@ -10,6 +11,8 @@ const langfuseLangchainHandler = new CallbackHandler({
   baseUrl: process.env.LANGFUSE_HOST,
   flushAt: 1 // cookbook-only: do not batch events, send them immediately
 });
+
+const langfuse = new Langfuse();
 
 // Import all functions included in function manifest
 // Note: the function name and file name must be the same
@@ -23,19 +26,32 @@ class GptService extends EventEmitter {
   constructor() {
     super();
     this.openai = new OpenAI();
-
-    let offer = 'Яндекс еда предлагает курьерам до 650 рублей в час, ежедневные выплаты на карту, гибкий график работы. Вам было бы интересно?'
-
-    this.userContext = [
-      { 'role': 'system', 'content': 'Your name is Dmitry. First introduce youself: You are an HR manager who hires couriers for a job: '+offer+'\n\nIf user interested in offer: Your task is to collect a questionnaire ask questions.\n\n Questions: Citizenship, City in which you are willing to work, How much time you are willing to work? We offer a flexible schedule, so its important to know your availability.\n\n -----\n Vacancy courier food delivery conditions: Income up to 650 rubles per hour, payments every day on your card. Quick connection to the service. Daily payments. Convenient work schedule. Legal support. Injury insurance for direct self-employed couriers when performing a certain number of orders. Introduce yourself at the beginning of the dialog, you speak in a phone call. Make short messages and Ask maximum one question it is important cause you now in phone call. Speak in Russian and form text with "..." or "um" "so" pauses like in real phone call small talk "um" "so". Numbers print as words.' },
-    ],
+    this.userContext = [];
     this.partialResponseIndex = 0;
   }
 
-  // Add the callSid to the chat context in case
-  // ChatGPT decides to transfer the call.
+  async loadPrompt(promptName) {
+    const prompt = await langfuse.getPrompt(promptName);
+    const offer = prompt.prompt;
+    this.userContext = [
+      { 'role': 'system', 'content': prompt.prompt },
+    ];
+  
+    if (prompt.config) {
+      process.env.OPENAI_MODEL = prompt.config.modelName || process.env.OPENAI_MODEL;
+  
+      if (prompt.config.temperature !== undefined) {
+        process.env.OPENAI_TEMPERATURE = prompt.config.temperature.toString();
+      }
+    }
+  }
+
   setCallSid (callSid) {
-    this.userContext.push({ 'role': 'system', 'content': `callSid: ${callSid}` });
+    this.callSid = callSid;
+  }
+  
+  setStreamSid (streamSid) {
+    this.streamSid = streamSid;
   }
 
   validateFunctionArgs (args) {
@@ -66,9 +82,9 @@ class GptService extends EventEmitter {
 
     // Step 1: Send user transcription to Chat GPT
     const stream = await this.openai.chat.completions.create({
-      model: 'gpt-4-0125-preview',
+      model: process.env.OPENAI_MODEL,
       messages: this.userContext,
-      temperature: 0,
+      temperature: parseFloat(process.env.OPENAI_TEMPERATURE),
       max_tokens: 200,
       stream: true,
     });
@@ -83,7 +99,7 @@ class GptService extends EventEmitter {
       messagesWithHistory,
       runId,
       undefined,
-      { invocation_params: { model: 'gpt-4-0125-preview', max_tokens: 200, temperature: 0 } },
+      { invocation_params: { model: process.env.OPENAI_MODEL, max_tokens: 200, temperature: parseFloat(process.env.OPENAI_TEMPERATURE) } },
       undefined,
       { interactionCount },
       'gpt-completion'
@@ -161,14 +177,6 @@ class GptService extends EventEmitter {
     );
   
     console.log(`GPT -> user context length: ${this.userContext.length}`.green);
-  }
-
-  setCallSid (callSid) {
-    this.callSid = callSid;
-  }
-  
-  setStreamSid (streamSid) {
-    this.streamSid = streamSid;
   }
 }
 
